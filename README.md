@@ -1,6 +1,6 @@
 # Azure Search Index Backup and Restore
 
-The purpose of this tool is to help with extraction of content from an Azure Search index and restoration to a new index.
+The purpose of this tool is to help with extraction of content from an Azure Search index and restoration to a new index during the development phase.
 
 ## Important - Please Read
 

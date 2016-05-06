@@ -32,6 +32,8 @@ namespace AzureSearchBackupRestore
 
         private static int MaxBatchSize = 500;          // JSON files will contain this many documents / file and can be up to 1000
         private static int ParallelizedJobs = 10;       // Output content in parallel jobs
+        private static DateTimeOffset LastModifiedDate = new DateTimeOffset(new DateTime(1900, 1, 1));
+        private static int DesiredIndexSize = 1000000;
 
         static void Main(string[] args)
         {
@@ -40,32 +42,39 @@ namespace AzureSearchBackupRestore
             TargetSearchClient = new SearchServiceClient(TargetSearchServiceName, new SearchCredentials(TargetAPIKey));
             TargetIndexClient = TargetSearchClient.Indexes.GetClient(TargetIndexName);
 
+            int TargetDocCount = 0;
             // Extract the index schema and write to file
             Console.WriteLine("Writing Index Schema to {0}\r\n", SourceIndexName + ".schema");
             File.WriteAllText(SourceIndexName + ".schema", GetIndexSchema());
 
-            // Extract the content to JSON files 
-            int SourceDocCount = GetCurrentDocCount(SourceIndexClient);
-            LaunchParallelDataExtraction(SourceDocCount);     // Output content from index to json files
-
-            // Re-create and import content to target index
             DeleteIndex();
             CreateTargetIndex();
-            ImportFromJSON();
-            Console.WriteLine("\r\nWaiting 10 seconds for target to index content...");
-            Console.WriteLine("NOTE: For really large indexes it may take longer to index all content.\r\n");
-            Thread.Sleep(10000);
+            while (TargetDocCount < DesiredIndexSize)
+            {
+                // Extract the content to JSON files 
+                //int SourceDocCount = GetCurrentDocCount(SourceIndexClient);
+                int SourceDocCount = 100000;
+                LaunchParallelDataExtraction(SourceDocCount);     // Output content from index to json files
 
-            // Validate all content is in target index
-            int TargetDocCount = GetCurrentDocCount(TargetIndexClient);
-            Console.WriteLine("Source Index contains {0} docs", SourceDocCount);
-            Console.WriteLine("Target Index contains {0} docs\r\n", TargetDocCount);
+                // Re-create and import content to target index
+
+                ImportFromJSON();
+                Console.WriteLine("\r\nWaiting 10 seconds for target to index content...");
+                Console.WriteLine("NOTE: For really large indexes it may take longer to index all content.\r\n");
+                Thread.Sleep(10000);
+
+                // Validate all content is in target index
+                TargetDocCount = GetCurrentDocCount(TargetIndexClient);
+                //Console.WriteLine("Source Index contains {0} docs", SourceDocCount);
+                Console.WriteLine("Target Index contains {0} docs\r\n", TargetDocCount);
+            }
             Console.WriteLine("Press any key to continue...");
             Console.ReadLine();
         }
 
         static void LaunchParallelDataExtraction(int CurrentDocCount)
         {
+            var localLastModifiedDate = LastModifiedDate.AddDays(-5);
             // Launch output in parallel
             string IDFieldName = GetIDFieldName();
             int FileCounter = 0;
@@ -82,7 +91,7 @@ namespace AzureSearchBackupRestore
                         Console.WriteLine("Writing {0} docs to {1}", MaxBatchSize, SourceIndexName + fileCounter + ".json");
 
                         tasks.Add(Task.Factory.StartNew(() =>
-                            ExportToJSON((fileCounter - 1) * MaxBatchSize, IDFieldName, SourceIndexName + fileCounter + ".json")
+                            ExportToJSON((fileCounter - 1) * MaxBatchSize, IDFieldName, SourceIndexName + fileCounter + ".json", localLastModifiedDate)
                         ));
                     }
 
@@ -93,7 +102,7 @@ namespace AzureSearchBackupRestore
             return;
         }
 
-        static void ExportToJSON(int Skip, string IDFieldName, string FileName)
+        static void ExportToJSON(int Skip, string IDFieldName, string FileName, DateTimeOffset lastModifiedDate)
         {
             // Extract all the documents from the selected index to JSON files in batches of 500 docs / file
             string json = string.Empty;
@@ -103,17 +112,24 @@ namespace AzureSearchBackupRestore
                 {
                     SearchMode = SearchMode.All,
                     Top = MaxBatchSize,
-                    Skip = Skip
+                    Skip = Skip,
+                    Filter = $"ModifiedDate gt {lastModifiedDate.ToString("s")}Z",
+                    OrderBy = new List<string> { "ModifiedDate asc" }
                 };
                 DocumentSearchResult response = SourceIndexClient.Documents.Search("*", sp);
 
                 foreach (var doc in response.Results)
                 {
+                    var docDateTime = (DateTimeOffset)doc.Document["ModifiedDate"];
+                    if (LastModifiedDate < docDateTime)
+                    {
+                        LastModifiedDate = docDateTime;
+                    }
                     json += JsonConvert.SerializeObject(doc.Document) + ",";
                     // Geospatial is formatted such that it needs to be changed for reupload
-                    json = json.Replace("\"Latitude\":", "\"type\": \"Point\", \"coordinates\": [");
-                    json = json.Replace("\"Longitude\":", "");
-                    json = json.Replace(",\"IsEmpty\":false,\"Z\":null,\"M\":null,\"CoordinateSystem\":{\"EpsgId\":4326,\"Id\":\"4326\",\"Name\":\"WGS84\"}", "]");
+                    //json = json.Replace("\"Latitude\":", "\"type\": \"Point\", \"coordinates\": [");
+                    //json = json.Replace("\"Longitude\":", "");
+                    //json = json.Replace(",\"IsEmpty\":false,\"Z\":null,\"M\":null,\"CoordinateSystem\":{\"EpsgId\":4326,\"Id\":\"4326\",\"Name\":\"WGS84\"}", "]");
                     json += "\r\n";
                 }
 
@@ -210,8 +226,8 @@ namespace AzureSearchBackupRestore
 
             // Do some cleaning of this file to change index name, etc
             json = "{" + json.Substring(json.IndexOf("\"name\""));
-            int indexOfIndexName = json.IndexOf("\"",json.IndexOf("name\"")+5) + 1;
-            int indexOfEndOfIndexName = json.IndexOf("\"",indexOfIndexName);
+            int indexOfIndexName = json.IndexOf("\"", json.IndexOf("name\"") + 5) + 1;
+            int indexOfEndOfIndexName = json.IndexOf("\"", indexOfIndexName);
             json = json.Substring(0, indexOfIndexName) + TargetIndexName + json.Substring(indexOfEndOfIndexName);
 
             Uri ServiceUri = new Uri("https://" + TargetSearchServiceName + ".search.windows.net");
@@ -266,11 +282,11 @@ namespace AzureSearchBackupRestore
 
             try
             {
-                foreach (string fileName in Directory.GetFiles(Directory.GetCurrentDirectory(), SourceIndexName +"*.json"))
+                foreach (string fileName in Directory.GetFiles(Directory.GetCurrentDirectory(), SourceIndexName + "*.json"))
                 {
                     Console.WriteLine("Uploading documents from file {0}", fileName);
                     string json = File.ReadAllText(fileName);
-                    Uri uri = new Uri(ServiceUri, "/indexes/"+ TargetIndexName + "/docs/index");
+                    Uri uri = new Uri(ServiceUri, "/indexes/" + TargetIndexName + "/docs/index");
                     HttpResponseMessage response = AzureSearchHelper.SendSearchRequest(HttpClient, HttpMethod.Post, uri, json);
                     response.EnsureSuccessStatusCode();
                 }

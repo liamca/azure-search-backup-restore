@@ -214,9 +214,9 @@ namespace AzureSearchBackupRestore
             int indexOfEndOfIndexName = json.IndexOf("\"",indexOfIndexName);
             json = json.Substring(0, indexOfIndexName) + TargetIndexName + json.Substring(indexOfEndOfIndexName);
 
-            Uri ServiceUri = new Uri("https://" + SourceSearchServiceName + ".search.windows.net");
+            Uri ServiceUri = new Uri("https://" + TargetSearchServiceName + ".search.windows.net");
             HttpClient HttpClient = new HttpClient();
-            HttpClient.DefaultRequestHeaders.Add("api-key", SourceAPIKey);
+            HttpClient.DefaultRequestHeaders.Add("api-key", TargetAPIKey);
 
             try
             {
@@ -260,9 +260,9 @@ namespace AzureSearchBackupRestore
         static void ImportFromJSON()
         {
             // Take JSON file and import this as-is to target index
-            Uri ServiceUri = new Uri("https://" + SourceSearchServiceName + ".search.windows.net");
+            Uri ServiceUri = new Uri("https://" + TargetSearchServiceName + ".search.windows.net");
             HttpClient HttpClient = new HttpClient();
-            HttpClient.DefaultRequestHeaders.Add("api-key", SourceAPIKey);
+            HttpClient.DefaultRequestHeaders.Add("api-key", TargetAPIKey);
 
             try
             {

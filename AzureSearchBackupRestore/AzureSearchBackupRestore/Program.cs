@@ -25,6 +25,7 @@ namespace AzureSearchBackupRestore
         private static string TargetAPIKey = [Target Search Service API Key];
         private static string TargetIndexName = [Target Index Name];
 
+
         private static SearchServiceClient SourceSearchClient;
         private static SearchIndexClient SourceIndexClient;
         private static SearchServiceClient TargetSearchClient;
@@ -111,10 +112,40 @@ namespace AzureSearchBackupRestore
                 {
                     json += JsonConvert.SerializeObject(doc.Document) + ",";
                     // Geospatial is formatted such that it needs to be changed for reupload
+                    // Unfortunately since it comes down in Lat, Lon format, I need to alter it to Lon, Lat for upload
+
+                    while (json.IndexOf("CoordinateSystem") > -1)
+                    {
+                        // At this point the data looks like this
+                        // {"Latitude":38.3399,"Longitude":-86.0887,"IsEmpty":false,"Z":null,"M":null,"CoordinateSystem":{"EpsgId":4326,"Id":"4326","Name":"WGS84"}}
+                        int LatStartLocation = json.IndexOf("\"Latitude\":");
+                        LatStartLocation = json.IndexOf(":", LatStartLocation) + 1;
+                        int LatEndLocation = json.IndexOf(",", LatStartLocation);
+                        int LonStartLocation = json.IndexOf("\"Longitude\":");
+                        LonStartLocation = json.IndexOf(":", LonStartLocation)+1;
+                        int LonEndLocation = json.IndexOf(",", LonStartLocation);
+                        string Lat = json.Substring(LatStartLocation, LatEndLocation - LatStartLocation);
+                        string Lon = json.Substring(LonStartLocation, LonEndLocation - LonStartLocation);
+
+                        // Now it needs to look like this
+                        // { "type": "Point", "coordinates": [-122.131577, 47.678581] }
+                        int GeoStartPosition = json.IndexOf("\"Latitude\":") - 1;
+                        int GeoEndPosition = json.IndexOf("}}", GeoStartPosition) + 2;
+                        string updatedJson = json.Substring(0, GeoStartPosition) + "{ \"type\": \"Point\", \"coordinates\": [";
+                        updatedJson += Lon + ", " + Lat + "] }";
+                        updatedJson += json.Substring(GeoEndPosition);
+                        json = updatedJson;
+                    }
+
                     json = json.Replace("\"Latitude\":", "\"type\": \"Point\", \"coordinates\": [");
                     json = json.Replace("\"Longitude\":", "");
                     json = json.Replace(",\"IsEmpty\":false,\"Z\":null,\"M\":null,\"CoordinateSystem\":{\"EpsgId\":4326,\"Id\":\"4326\",\"Name\":\"WGS84\"}", "]");
                     json += "\r\n";
+
+                    //{ "type": "Point", "coordinates": [-122.131577, 47.678581] }
+                    //{"Latitude":41.113,"Longitude":-95.6269}
+                    //json += "\r\n";
+
                 }
 
                 // Output the formatted content to a file
